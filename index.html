@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="zh-HK" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Gemini 即時翻譯</title>
+
+  <!-- iPhone Safari PWA 專屬設定 -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="即時翻譯" />
+  <meta name="theme-color" content="#09090b" />
+
+  <!-- 內嵌 SVG 圖示（主畫面 App 圖示與 Favicon，無需額外圖片檔） -->
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%234f46e5'/%3E%3Cstop offset='100%25' stop-color='%2306b6d4'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='180' height='180' rx='40' fill='url(%23g)'/%3E%3Cpath d='M90 42a18 18 0 0 0-18 18v28a18 18 0 0 0 36 0V60a18 18 0 0 0-18-18z' fill='%23ffffff'/%3E%3Cpath d='M56 86a34 34 0 0 0 68 0' fill='none' stroke='%23ffffff' stroke-width='10' stroke-linecap='round'/%3E%3Cpath d='M90 120v20M72 140h36' fill='none' stroke='%23ffffff' stroke-width='10' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%234f46e5'/%3E%3Cpath d='M32 14a7 7 0 0 0-7 7v11a7 7 0 0 0 14 0V21a7 7 0 0 0-7-7z' fill='%23fff'/%3E%3Cpath d='M19 31a13 13 0 0 0 26 0M32 44v8M25 52h14' fill='none' stroke='%23fff' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E" />
+
+  <!-- 載入 Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', '"PingFang HK"', '"Noto Sans TC"', 'sans-serif'],
+          },
+          colors: {
+            surface: '#121215',
+            surfaceElevated: '#1c1c21',
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    /* iOS 安全區域與原生物理捲動優化 */
+    :root {
+      --sat: env(safe-area-inset-top, 0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+    }
+
+    html, body {
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+      background-color: #09090b;
+      color: #f4f4f5;
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior: none;
+    }
+
+    .pt-safe {
+      padding-top: max(12px, var(--sat));
+    }
+
+    .pb-safe {
+      padding-bottom: max(16px, var(--sab));
+    }
+
+    /* 隱藏捲軸但保留流暢捲動 */
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+    /* 錄音動態波紋動畫 */
+    @keyframes pulseRing {
+      0% { transform: scale(0.95); opacity: 0.7; }
+      70% { transform: scale(1.28); opacity: 0; }
+      100% { transform: scale(1.28); opacity: 0; }
+    }
+    .animate-pulse-ring {
+      animation: pulseRing 1.8s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+    }
+
+    /* 語音音量條平順過渡 */
+    .viz-bar {
+      transition: height 75ms ease-out, background-color 150ms ease;
+    }
+  </style>
+</head>
+<body class="flex flex-col h-full w-full bg-[#09090b] text-zinc-100 antialiased selection:bg-indigo-500/30">
+
+  <!-- 頂部提示 Toast（取代原生 alert） -->
+  <div id="toastContainer" class="fixed top-safe left-1/2 -translate-x-1/2 z-50 pointer-events-none w-[90%] max-w-sm flex flex-col items-center gap-2 pt-3"></div>
+
+  <!-- 1. 頂部標題列 Header -->
+  <header class="pt-safe px-4 pb-3 bg-[#09090b]/85 backdrop-blur-xl border-b border-zinc-800/80 z-20 shrink-0">
+    <div class="max-w-xl mx-auto flex items-center justify-between gap-2">
+      <!-- 標題與圖示 -->
+      <div class="flex items-center gap-2.5 min-w-0">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
+          <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+          </svg>
+        </div>
+        <div class="min-w-0">
+          <h1 class="text-base font-semibold tracking-tight text-white truncate">Gemini 即時翻譯</h1>
+          <p id="modelSubtitle" class="text-[11px] text-zinc-400 truncate font-mono">gemini-3.5-live-translate-preview</p>
+        </div>
+      </div>
+
+      <!-- 狀態標籤與設定按鈕 -->
+      <div class="flex items-center gap-2 shrink-0">
+        <div id="statusPill" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-xs font-medium text-zinc-400 transition-colors">
+          <span id="statusDot" class="w-2 h-2 rounded-full bg-zinc-500"></span>
+          <span id="statusText">未連線</span>
+        </div>
+
+        <button id="openSettingsBtn" type="button" aria-label="開啟設定" class="p-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-zinc-800 text-zinc-300 transition">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 2. 語言快速選擇列 -->
+  <section class="px-4 py-2.5 bg-[#0e0e11] border-b border-zinc-800/70 shrink-0 z-10">
+    <div class="max-w-xl mx-auto flex items-center gap-2">
+      <!-- 來源語言提示 -->
+      <div class="flex-1 min-w-0">
+        <label for="quickSourceLang" class="block text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5 pl-1">來源語音</label>
+        <select id="quickSourceLang" class="w-full bg-zinc-900 text-zinc-100 text-sm font-medium rounded-xl px-3 py-2 border border-zinc-800 focus:outline-none focus:border-indigo-500 transition">
+          <option value="自動偵測 (以廣東話優先)">自動 / 廣東話</option>
+          <option value="廣東話 (Cantonese)">廣東話</option>
+          <option value="日文 (Japanese)">日文</option>
+          <option value="英文 (English)">英文</option>
+          <option value="普通話 (Mandarin)">普通話</option>
+          <option value="韓文 (Korean)">韓文</option>
+        </select>
+      </div>
+
+      <!-- 箭嘴 / 互換按鈕 -->
+      <button id="swapLangBtn" type="button" title="互換語言" class="mt-4 p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 active:scale-90 border border-zinc-800 text-indigo-400 transition shrink-0">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+        </svg>
+      </button>
+
+      <!-- 目標語言 -->
+      <div class="flex-1 min-w-0">
+        <label for="quickTargetLang" class="block text-[10px] uppercase tracking-wider text-indigo-400 mb-0.5 pl-1">譯成語言</label>
+        <select id="quickTargetLang" class="w-full bg-indigo-950/40 text-indigo-100 text-sm font-semibold rounded-xl px-3 py-2 border border-indigo-500/40 focus:outline-none focus:border-indigo-400 transition">
+          <option value="日文 (Japanese)">日文 Japanese</option>
+          <option value="英文 (English)">英文 English</option>
+          <option value="廣東話 (Cantonese)">廣東話 Cantonese</option>
+          <option value="普通話/國語 (Mandarin)">普通話 Mandarin</option>
+          <option value="韓文 (Korean)">韓文 Korean</option>
+          <option value="法文 (French)">法文 French</option>
+          <option value="西班牙文 (Spanish)">西班牙文 Spanish</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. 即時雙語字幕主區域 -->
+  <main class="flex-1 overflow-y-auto no-scrollbar px-4 py-4 relative">
+    <div class="max-w-xl mx-auto flex flex-col gap-3 pb-4">
+      <!-- 字幕工具列 -->
+      <div class="flex items-center justify-between px-1">
+        <span class="text-xs font-medium text-zinc-500">即時雙語字幕</span>
+        <button id="clearFeedBtn" type="button" class="text-xs text-zinc-400 hover:text-zinc-200 px-2.5 py-1 rounded-lg bg-zinc-900/80 border border-zinc-800/80 active:scale-95 transition">
+          清除紀錄
+        </button>
+      </div>
+
+      <!-- 空白引導狀態 -->
+      <div id="emptyState" class="my-8 flex flex-col items-center justify-center text-center px-4">
+        <div class="w-16 h-16 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-4 text-indigo-400">
+          <svg class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 21l5.25-11.25L21 21m-9-3h7.5M3 5.621a48.474 48.474 0 016-.371m0 0c1.12 0 2.233.038 3.334.114M9 5.25V3m3.334 2.364C11.176 10.658 7.69 15.08 3 17.502m9.334-12.138c.896.061 1.785.147 2.666.257m-4.589 8.495a18.023 18.023 0 01-3.827-5.802" />
+          </svg>
+        </div>
+        <h2 class="text-base font-semibold text-zinc-200 mb-1.5">準備好開始即時同聲傳譯</h2>
+        <p class="text-xs text-zinc-400 leading-relaxed max-w-xs mb-4">
+          按下面嘅大圓掣即可啟動咪高峰收音，並即時將你講嘅說話譯成目標語言讀出。系統已鎖定「只做翻譯、唔會答問題」。
+        </p>
+        <div class="w-full max-w-xs rounded-2xl bg-zinc-900/70 border border-zinc-800/80 p-3 text-left text-[11px] text-zinc-400 space-y-1.5">
+          <p class="text-zinc-300 font-medium flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+            iPhone 最佳使用貼士
+          </p>
+          <p>1. 請喺 <span class="text-zinc-200">Safari</span> 打開並點擊底部「分享 → 加入主畫面」。</p>
+          <p>2. 首次使用請先按右上角齒輪輸入你嘅 Gemini API Key。</p>
+        </div>
+      </div>
+
+      <!-- 字幕卡片列表容器 -->
+      <div id="subtitleFeed" class="flex flex-col gap-3"></div>
+    </div>
+  </main>
+
+  <!-- 4. 底部控制列與 Debug 抽屜 -->
+  <footer class="bg-[#0e0e11]/95 backdrop-blur-xl border-t border-zinc-800/80 shrink-0 z-20 pb-safe">
+    <div class="max-w-xl mx-auto px-4 pt-3">
+      <!-- 咪高峰即時音量波紋條 -->
+      <div class="flex items-center justify-center gap-1 h-7 mb-3" id="visualizerContainer" aria-hidden="true">
+        <div class="viz-bar w-1 h-1.5 rounded-full bg-zinc-700"></div>
+        <div class="viz-bar w-1 h-2 rounded-full bg-zinc-700"></div>
+        <div class="viz-bar w-1 h-2.5 rounded-full bg-zinc-700"></div>
+        <div class="viz-bar w-1 h-3 rounded-full bg-zinc-700"></div>
+        <div class="viz-bar w-1 h-4 rounded-full bg-zinc-700"></div>
+        <div class="viz-bar w-1 h-3 rounded-full bg-zinc-700"></div>
+        <div class="viz-bar w-1 h-4 rounded-full bg-zinc-700"></div>
+        <div class="viz-bar w-1 h-3 rounded-full bg-zinc-700"></div>
+        <div class="viz-bar w-1 h-2.5 rounded-full bg-zinc-700"></div>
+        <div class="viz-bar w-1 h-2 rounded-full bg-zinc-700"></div>
+        <div class="viz-bar w-1 h-1.5 rounded-full bg-zinc-700"></div>
+      </div>
+
+      <!-- 主按鈕區：開始 / 停止翻譯 -->
+      <div class="flex items-center justify-center gap-6 mb-3">
+        <!-- 靜音切換按鈕（連線後啟用） -->
+        <button id="muteBtn" type="button" disabled class="w-12 h-12 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-500 disabled:opacity-40 active:scale-95 transition" title="暫停/恢復收音">
+          <svg id="muteIconOff" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+          </svg>
+          <svg id="muteIconOn" class="w-5 h-5 hidden text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+          </svg>
+        </button>
+
+        <!-- 大圓形開始/停止按鈕 -->
+        <div class="relative flex items-center justify-center">
+          <div id="pulseRing" class="hidden absolute inset-0 rounded-full bg-rose-500/40 animate-pulse-ring pointer-events-none"></div>
+          <button id="toggleSessionBtn" type="button" class="relative w-20 h-20 rounded-full bg-gradient-to-tr from-indigo-600 to-cyan-500 text-white shadow-xl shadow-indigo-600/30 flex flex-col items-center justify-center active:scale-95 transition-all duration-200 border-2 border-white/15">
+            <!-- 開始圖示 -->
+            <svg id="startIcon" class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+            </svg>
+            <!-- 停止圖示 -->
+            <div id="stopIcon" class="hidden w-6 h-6 rounded-md bg-white"></div>
+          </button>
+        </div>
+
+        <!-- 喇叭開關按鈕（控制是否播放譯文語音） -->
+        <button id="speakerBtn" type="button" class="w-12 h-12 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-200 active:scale-95 transition" title="開關譯文語音播放">
+          <svg id="speakerIconOn" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
+          </svg>
+          <svg id="speakerIconOff" class="w-5 h-5 hidden text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M17.25 9.75L19.5 12m0 0l2.25 2.25M19.5 12l2.25-2.25M19.5 12l-2.25 2.25m-10.5-6l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
+          </svg>
+        </button>
+      </div>
+
+      <p id="actionHint" class="text-center text-xs text-zinc-400 mb-2">點擊開始即時翻譯</p>
+
+      <!-- 可摺疊連線日誌 (Debug) 抽屜 -->
+      <div class="border-t border-zinc-800/80 pt-2">
+        <button id="toggleDebugBtn" type="button" class="w-full flex items-center justify-between text-[11px] text-zinc-500 hover:text-zinc-300 py-1">
+          <span class="flex items-center gap-1.5 font-mono">
+            <svg id="debugChevron" class="w-3.5 h-3.5 transition-transform duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+            </svg>
+            連線日誌 (Debug)
+          </span>
+          <span id="debugLatestMsg" class="truncate max-w-[55%] text-zinc-500 font-mono">就緒</span>
+        </button>
+
+        <div id="debugDrawer" class="hidden mt-2 bg-black/70 border border-zinc-800 rounded-xl p-2.5">
+          <div class="flex items-center justify-between mb-1.5 pb-1 border-b border-zinc-800/80">
+            <span class="text-[10px] text-zinc-400 font-mono">WebSocket &amp; Audio 紀錄</span>
+            <div class="flex items-center gap-2">
+              <button id="copyDebugBtn" type="button" class="text-[10px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 hover:bg-zinc-700">複製</button>
+              <button id="clearDebugBtn" type="button" class="text-[10px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 hover:bg-zinc-700">清空</button>
+            </div>
+          </div>
+          <div id="debugLogList" class="h-32 overflow-y-auto font-mono text-[10px] leading-relaxed text-zinc-300 space-y-1"></div>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- 5. 設定面板 Modal -->
+  <div id="settingsModal" class="hidden fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-0 sm:p-4">
+    <div class="w-full max-w-lg bg-[#141418] border-t sm:border border-zinc-800 rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90dvh]">
+      <!-- Modal 標題 -->
+      <div class="px-5 py-4 border-b border-zinc-800 flex items-center justify-between shrink-0">
+        <div>
+          <h2 class="text-base font-semibold text-white">連線與翻譯設定</h2>
+          <p class="text-[11px] text-zinc-400">所有資料只會儲存在你手機嘅本地瀏覽器</p>
+        </div>
+        <button id="closeSettingsBtn" type="button" class="p-2 rounded-xl bg-zinc-900 text-zinc-400 hover:text-white transition">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Modal 表單內容 -->
+      <div class="p-5 overflow-y-auto space-y-4">
+        <!-- API Key -->
+        <div>
+          <label for="apiKeyInput" class="block text-xs font-medium text-zinc-300 mb-1.5">Gemini API Key <span class="text-rose-400">*</span></label>
+          <div class="relative">
+            <input id="apiKeyInput" type="password" autocomplete="off" spellcheck="false" placeholder="貼上 AIza... 開頭嘅 API Key"
+              class="w-full bg-zinc-900 text-zinc-100 text-sm rounded-xl pl-3.5 pr-11 py-3 border border-zinc-700 focus:outline-none focus:border-indigo-500 font-mono" />
+            <button id="toggleApiKeyVisBtn" type="button" class="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-zinc-400 hover:text-zinc-200" aria-label="顯示或隱藏 API Key">
+              <svg id="eyeOpenIcon" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              <svg id="eyeClosedIcon" class="w-4 h-4 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
+              </svg>
+            </button>
+          </div>
+          <p class="mt-1.5 text-[11px] text-zinc-500">可於 Google AI Studio 取得。儲存在本機 <code class="text-zinc-400">localStorage</code>，放上 GitHub Pages 亦唔會外洩。</p>
+        </div>
+
+        <!-- 模型選擇 -->
+        <div>
+          <label for="modelInput" class="block text-xs font-medium text-zinc-300 mb-1.5">Live 模型名稱</label>
+          <input id="modelInput" type="text" autocomplete="off" spellcheck="false"
+            class="w-full bg-zinc-900 text-zinc-100 text-sm rounded-xl px-3.5 py-2.5 border border-zinc-700 focus:outline-none focus:border-indigo-500 font-mono" />
+          <div class="flex flex-wrap gap-1.5 mt-2">
+            <button type="button" data-model="gemini-3.5-live-translate-preview" class="model-preset-btn text-[11px] px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 transition">
+              3.5 Live Translate (推薦)
+            </button>
+            <button type="button" data-model="gemini-3.1-flash-live-preview" class="model-preset-btn text-[11px] px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 transition">
+              3.1 Flash Live
+            </button>
+          </div>
+        </div>
+
+        <!-- 預設語氣與專有名詞指令 -->
+        <div>
+          <label for="customToneInput" class="block text-xs font-medium text-zinc-300 mb-1.5">語氣 / 專有名詞備註（選填）</label>
+          <textarea id="customToneInput" rows="3" placeholder="例如：只做翻譯，絕對不要回答問題。語氣自然有禮。"
+            class="w-full bg-zinc-900 text-zinc-100 text-sm rounded-xl px-3.5 py-2.5 border border-zinc-700 focus:outline-none focus:border-indigo-500 resize-none"></textarea>
+        </div>
+      </div>
+
+      <!-- Modal 底部按鈕 -->
+      <div class="px-5 py-4 border-t border-zinc-800 pb-safe bg-[#141418] shrink-0">
+        <button id="saveSettingsBtn" type="button" class="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-[0.99] text-white font-semibold text-sm shadow-lg shadow-indigo-600/25 transition">
+          儲存設定
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      // =========================================================================
+      // 1. 狀態管理與本機設定 (localStorage)
+      // =========================================================================
+      const STORAGE_KEYS = {
+        API_KEY: 'gemini_live_translate_api_key',
+        MODEL: 'gemini_live_translate_model',
+        SOURCE_LANG: 'gemini_live_translate_source_lang',
+        TARGET_LANG: 'gemini_live_translate_target_lang',
+        CUSTOM_TONE: 'gemini_live_translate_custom_tone'
+      };
+
+      const DEFAULT_SETTINGS = {
+        apiKey: '',
+        model: 'gemini-3.5-live-translate-preview',
+        sourceLang: '自動偵測 (以廣東話優先)',
+        targetLang: '日文 (Japanese)',
+        customTone: '只做翻譯，絕對不要回答問題。語氣自然有禮，符合地道表達。'
+      };
+
+      let settings = { ...DEFAULT_SETTINGS };
+
+      // 連線與音訊執行期狀態
+      let ws = null;
+      let isSessionActive = false;
+      let isSetupComplete = false;
+      let isMuted = false;
+      let isSpeakerEnabled = true;
+
+      // Web Audio 相關參考
+      let audioCtx = null;
+      let mediaStream = null;
+      let micSourceNode = null;
+      let captureNode = null; // AudioWorkletNode 或 ScriptProcessorNode
+      let workletBlobUrl = null;
+      let nextPlayTime = 0;
+      const activePlaybackNodes = new Set();
+
+      // 降採樣至 16kHz 所需的緩衝區（目標：每 100ms 送出 1600 個樣本）
+      const TARGET_SAMPLE_RATE = 16000;
+      const CHUNK_SAMPLES = 1600;
+      let resampleBuffer = [];
+
+      // 字幕回合追蹤
+      let currentTurnCard = null;
+      let currentInputText = '';
+      let currentOutputText = '';
+      const debugLogs = [];
+
+      // =========================================================================
+      // 2. DOM 元素綁定
+      // =========================================================================
+      const els = {
+        toastContainer: document.getElementById('toastContainer'),
+        modelSubtitle: document.getElementById('modelSubtitle'),
+        statusPill: document.getElementById('statusPill'),
+        statusDot: document.getElementById('statusDot'),
+        statusText: document.getElementById('statusText'),
+        openSettingsBtn: document.getElementById('openSettingsBtn'),
+        closeSettingsBtn: document.getElementById('closeSettingsBtn'),
+        saveSettingsBtn: document.getElementById('saveSettingsBtn'),
+        settingsModal: document.getElementById('settingsModal'),
+        apiKeyInput: document.getElementById('apiKeyInput'),
+        toggleApiKeyVisBtn: document.getElementById('toggleApiKeyVisBtn'),
+        eyeOpenIcon: document.getElementById('eyeOpenIcon'),
+        eyeClosedIcon: document.getElementById('eyeClosedIcon'),
+        modelInput: document.getElementById('modelInput'),
+        customToneInput: document.getElementById('customToneInput'),
+        quickSourceLang: document.getElementById('quickSourceLang'),
+        quickTargetLang: document.getElementById('quickTargetLang'),
+        swapLangBtn: document.getElementById('swapLangBtn'),
+        emptyState: document.getElementById('emptyState'),
+        subtitleFeed: document.getElementById('subtitleFeed'),
+        clearFeedBtn: document.getElementById('clearFeedBtn'),
+        visualizerBars: document.querySelectorAll('#visualizerContainer .viz-bar'),
+        toggleSessionBtn: document.getElementById('toggleSessionBtn'),
+        pulseRing: document.getElementById('pulseRing'),
+        startIcon: document.getElementById('startIcon'),
+        stopIcon: document.getElementById('stopIcon'),
+        actionHint: document.getElementById('actionHint'),
+        muteBtn: document.getElementById('muteBtn'),
+        muteIconOff: document.getElementById('muteIconOff'),
+        muteIconOn: document.getElementById('muteIconOn'),
+        speakerBtn: document.getElementById('speakerBtn'),
+        speakerIconOn: document.getElementById('speakerIconOn'),
+        speakerIconOff: document.getElementById('speakerIconOff'),
+        toggleDebugBtn: document.getElementById('toggleDebugBtn'),
+        debugChevron: document.getElementById('debugChevron'),
+        debugDrawer: document.getElementById('debugDrawer'),
+        debugLatestMsg: document.getElementById('debugLatestMsg'),
+        debugLogList: document.getElementById('debugLogList'),
+        copyDebugBtn: document.getElementById('copyDebugBtn'),
+        clearDebugBtn: document.getElementById('clearDebugBtn')
+      };
+
+      // =========================================================================
+      // 3. 工具函式：Toast 提示、Debug 日誌、Base64 編解碼
+      // =========================================================================
+      function showToast(message, type = 'info') {
+        const toast = document.createElement('div');
+        const colors = {
+          info: 'bg-zinc-800/95 border-zinc-700 text-zinc-100',
+          success: 'bg-emerald-950/95 border-emerald-700/70 text-emerald-100',
+          error: 'bg-rose-950/95 border-rose-700/70 text-rose-100',
+          warning: 'bg-amber-950/95 border-amber-700/70 text-amber-100'
+        };
+        toast.className = `px-4 py-2.5 rounded-2xl border backdrop-blur-md shadow-xl text-xs font-medium text-center transition-all duration-300 opacity-0 -translate-y-2 ${colors[type] || colors.info}`;
+        toast.textContent = message;
+        els.toastContainer.appendChild(toast);
+
+        requestAnimationFrame(() => {
+          toast.classList.remove('opacity-0', '-translate-y-2');
+        });
+
+        setTimeout(() => {
+          toast.classList.add('opacity-0', '-translate-y-2');
+          setTimeout(() => toast.remove(), 300);
+        }, 2800);
+      }
+
+      function addDebugLog(msg, level = 'info') {
+        const now = new Date();
+        const ts = now.toTimeString().slice(0, 8);
+        const line = `[${ts}] ${msg}`;
+        debugLogs.push(line);
+        if (debugLogs.length > 150) debugLogs.shift();
+
+        els.debugLatestMsg.textContent = msg;
+        const item = document.createElement('div');
+        const colorClass = level === 'error' ? 'text-rose-400' : level === 'success' ? 'text-emerald-400' : level === 'warn' ? 'text-amber-300' : 'text-zinc-300';
+        item.className = `${colorClass} break-all`;
+        item.textContent = line;
+        els.debugLogList.appendChild(item);
+        els.debugLogList.scrollTop = els.debugLogList.scrollHeight;
+      }
+
+      function setStatus(state, label) {
+        els.statusText.textContent = label;
+        const styles = {
+          idle: {
+            pill: 'bg-zinc-900 border-zinc-800 text-zinc-400',
+            dot: 'bg-zinc-500'
+          },
+          connecting: {
+            pill: 'bg-amber-950/50 border-amber-500/40 text-amber-300',
+            dot: 'bg-amber-400 animate-pulse'
+          },
+          active: {
+            pill: 'bg-emerald-950/50 border-emerald-500/40 text-emerald-300',
+            dot: 'bg-emerald-400 animate-pulse'
+          },
+          error: {
+            pill: 'bg-rose-950/50 border-rose-500/40 text-rose-300',
+            dot: 'bg-rose-500'
+          }
+        };
+        const s = styles[state] || styles.idle;
+        els.statusPill.className = `flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium transition-colors ${s.pill}`;
+        els.statusDot.className = `w-2 h-2 rounded-full ${s.dot}`;
+      }
+
+      // 手動 Uint8Array 轉 Base64（避免大陣列 apply 爆堆疊）
+      function uint8ToBase64(bytes) {
+        let binary = '';
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
+      }
+
+      // 手動 Base64 轉 Uint8Array
+      function base64ToUint8(base64) {
+        const binaryString = atob(base64);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes;
+      }
+
+      // =========================================================================
+      // 4. 設定載入與儲存
+      // =========================================================================
+      function loadSettings() {
+        try {
+          settings.apiKey = localStorage.getItem(STORAGE_KEYS.API_KEY) || '';
+          settings.model = localStorage.getItem(STORAGE_KEYS.MODEL) || DEFAULT_SETTINGS.model;
+          settings.sourceLang = localStorage.getItem(STORAGE_KEYS.SOURCE_LANG) || DEFAULT_SETTINGS.sourceLang;
+          settings.targetLang = localStorage.getItem(STORAGE_KEYS.TARGET_LANG) || DEFAULT_SETTINGS.targetLang;
+          const savedTone = localStorage.getItem(STORAGE_KEYS.CUSTOM_TONE);
+          settings.customTone = savedTone !== null ? savedTone : DEFAULT_SETTINGS.customTone;
+        } catch (err) {
+          addDebugLog('無法讀取 localStorage: ' + err.message, 'warn');
+        }
+
+        // 同步到畫面
+        els.apiKeyInput.value = settings.apiKey;
+        els.modelInput.value = settings.model;
+        els.customToneInput.value = settings.customTone;
+        els.quickSourceLang.value = settings.sourceLang;
+        els.quickTargetLang.value = settings.targetLang;
+        els.modelSubtitle.textContent = settings.model;
+      }
+
+      function saveSettingsToStorage() {
+        try {
+          localStorage.setItem(STORAGE_KEYS.API_KEY, settings.apiKey);
+          localStorage.setItem(STORAGE_KEYS.MODEL, settings.model);
+          localStorage.setItem(STORAGE_KEYS.SOURCE_LANG, settings.sourceLang);
+          localStorage.setItem(STORAGE_KEYS.TARGET_LANG, settings.targetLang);
+          localStorage.setItem(STORAGE_KEYS.CUSTOM_TONE, settings.customTone);
+        } catch (err) {
+          addDebugLog('無法寫入 localStorage: ' + err.message, 'warn');
+        }
+      }
+
+      function openSettingsModal() {
+        els.apiKeyInput.value = settings.apiKey;
+        els.modelInput.value = settings.model;
+        els.customToneInput.value = settings.customTone;
+        els.settingsModal.classList.remove('hidden');
+      }
+
+      function closeSettingsModal() {
+        els.settingsModal.classList.add('hidden');
+      }
+
+      // =========================================================================
+      // 5. 雙語字幕 UI 管理
+      // =========================================================================
+      function ensureCurrentTurnCard() {
+        if (currentTurnCard) return currentTurnCard;
+
+        els.emptyState.classList.add('hidden');
+
+        const card = document.createElement('div');
+        card.className = 'rounded-2xl bg-[#131317] border border-zinc-800/90 p-3.5 shadow-sm space-y-2.5 transition-all';
+
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        card.innerHTML = `
+          <div class="flex items-center justify-between text-[10px] text-zinc-500">
+            <span class="font-medium text-zinc-400">原文</span>
+            <span class="font-mono">${timeStr}</span>
+          </div>
+          <p class="input-text text-sm text-zinc-300 leading-relaxed min-h-[1.25rem]">...</p>
+          <div class="border-t border-zinc-800/80 pt-2.5">
+            <div class="flex items-center justify-between text-[10px] mb-1">
+              <span class="font-medium text-indigo-400">譯文 · ${escapeHtml(settings.targetLang.split(' ')[0])}</span>
+            </div>
+            <p class="output-text text-base font-medium text-white leading-relaxed min-h-[1.5rem]">...</p>
+          </div>
+        `;
+
+        els.subtitleFeed.appendChild(card);
+        currentTurnCard = card;
+        scrollFeedToBottom();
+        return card;
+      }
+
+      function updateSubtitleInput(chunkText) {
+        if (!chunkText) return;
+        const card = ensureCurrentTurnCard();
+        currentInputText += chunkText;
+        card.querySelector('.input-text').textContent = currentInputText.trim();
+        scrollFeedToBottom();
+      }
+
+      function updateSubtitleOutput(chunkText) {
+        if (!chunkText) return;
+        const card = ensureCurrentTurnCard();
+        currentOutputText += chunkText;
+        card.querySelector('.output-text').textContent = currentOutputText.trim();
+        scrollFeedToBottom();
+      }
+
+      function finalizeCurrentTurn() {
+        if (currentTurnCard) {
+          const inEl = currentTurnCard.querySelector('.input-text');
+          const outEl = currentTurnCard.querySelector('.output-text');
+          if (!currentInputText.trim() && inEl) inEl.textContent = '（語音輸入）';
+          if (!currentOutputText.trim() && outEl) outEl.textContent = '（語音輸出）';
+        }
+        currentTurnCard = null;
+        currentInputText = '';
+        currentOutputText = '';
+      }
+
+      function scrollFeedToBottom() {
+        const mainEl = els.subtitleFeed.closest('main');
+        if (mainEl) {
+          mainEl.scrollTop = mainEl.scrollHeight;
+        }
+      }
+
+      function escapeHtml(str) {
+        return str.replace(/[&<>"']/g, (m) => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[m]));
+      }
+
+      // =========================================================================
+      // 6. 音量條視覺回饋
+      // =========================================================================
+      function updateVisualizer(rms) {
+        const bars = els.visualizerBars;
+        if (!isSessionActive || isMuted) {
+          bars.forEach((bar) => {
+            bar.style.height = '6px';
+            bar.className = 'viz-bar w-1 rounded-full bg-zinc-700';
+          });
+          return;
+        }
+
+        const level = Math.min(1, rms * 8);
+        const center = (bars.length - 1) / 2;
+        bars.forEach((bar, idx) => {
+          const dist = 1 - Math.abs(idx - center) / (center + 1);
+          const jitter = 0.75 + Math.random() * 0.5;
+          const px = Math.max(6, Math.round(6 + level * 22 * dist * jitter));
+          bar.style.height = px + 'px';
+          bar.className = level > 0.08
+            ? 'viz-bar w-1 rounded-full bg-gradient-to-t from-indigo-500 to-cyan-400'
+            : 'viz-bar w-1 rounded-full bg-indigo-500/40';
+        });
+      }
+
+      // =========================================================================
+      // 7. iOS Safari 音訊處理：收音降採樣 (16kHz PCM) & 播放 (24kHz PCM)
+      // =========================================================================
+      function processMicFloat32(inputData, inputSampleRate) {
+        if (!isSessionActive || !isSetupComplete || isMuted || !ws || ws.readyState !== WebSocket.OPEN) {
+          updateVisualizer(0);
+          return;
+        }
+
+        // 計算即時音量 RMS
+        let sumSq = 0;
+        for (let i = 0; i < inputData.length; i++) {
+          sumSq += inputData[i] * inputData[i];
+        }
+        const rms = Math.sqrt(sumSq / inputData.length);
+        updateVisualizer(rms);
+
+        // 線性插值降採樣至 16000Hz
+        if (inputSampleRate === TARGET_SAMPLE_RATE) {
+          for (let i = 0; i < inputData.length; i++) {
+            resampleBuffer.push(inputData[i]);
+          }
+        } else {
+          const ratio = inputSampleRate / TARGET_SAMPLE_RATE;
+          const outLength = Math.floor(inputData.length / ratio);
+          for (let i = 0; i < outLength; i++) {
+            const srcPos = i * ratio;
+            const idx = Math.floor(srcPos);
+            const frac = srcPos - idx;
+            const s0 = inputData[idx] || 0;
+            const s1 = inputData[Math.min(idx + 1, inputData.length - 1)] || 0;
+            resampleBuffer.push(s0 + (s1 - s0) * frac);
+          }
+        }
+
+        // 每累積 1600 個樣本（約 100ms）即封裝成 16-bit Little-Endian PCM 並送出
+        while (resampleBuffer.length >= CHUNK_SAMPLES) {
+          const chunk = resampleBuffer.splice(0, CHUNK_SAMPLES);
+          const buffer = new ArrayBuffer(CHUNK_SAMPLES * 2);
+          const view = new DataView(buffer);
+
+          for (let i = 0; i < CHUNK_SAMPLES; i++) {
+            const s = Math.max(-1, Math.min(1, chunk[i]));
+            const int16 = s < 0 ? s * 0x8000 : s * 0x7fff;
+            view.setInt16(i * 2, int16, true); // Little-Endian
+          }
+
+          const base64Pcm = uint8ToBase64(new Uint8Array(buffer));
+          try {
+            ws.send(JSON.stringify({
+              realtimeInput: {
+                mediaChunks: [{
+                  mimeType: 'audio/pcm;rate=16000',
+                  data: base64Pcm
+                }]
+              }
+            }));
+          } catch (err) {
+            addDebugLog('傳送音訊失敗: ' + err.message, 'error');
+          }
+        }
+      }
+
+      // 解碼模型回傳的 24kHz 16-bit Little-Endian PCM 並排程無縫播放
+      function schedulePcmPlayback(base64Data) {
+        if (!audioCtx || !isSpeakerEnabled) return;
+
+        try {
+          if (audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(() => {});
+          }
+
+          const bytes = base64ToUint8(base64Data);
+          const sampleCount = Math.floor(bytes.byteLength / 2);
+          if (sampleCount === 0) return;
+
+          const dataView = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+          const audioBuffer = audioCtx.createBuffer(1, sampleCount, 24000);
+          const channelData = audioBuffer.getChannelData(0);
+
+          for (let i = 0; i < sampleCount; i++) {
+            const int16 = dataView.getInt16(i * 2, true); // Little-Endian
+            channelData[i] = int16 / 32768.0;
+          }
+
+          const source = audioCtx.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(audioCtx.destination);
+
+          const now = audioCtx.currentTime;
+          if (nextPlayTime < now) {
+            nextPlayTime = now + 0.02; // 輕微緩衝避免爆音
+          }
+
+          source.start(nextPlayTime);
+          nextPlayTime += audioBuffer.duration;
+          activePlaybackNodes.add(source);
+
+          source.onended = () => {
+            activePlaybackNodes.delete(source);
+          };
+        } catch (err) {
+          addDebugLog('播音解碼錯誤: ' + err.message, 'error');
+        }
+      }
+
+      function stopAllPlayback() {
+        for (const node of activePlaybackNodes) {
+          try {
+            node.stop();
+            node.disconnect();
+          } catch (_) {}
+        }
+        activePlaybackNodes.clear();
+        nextPlayTime = 0;
+      }
+
+      // 建立收音節點（優先使用 Blob AudioWorklet，失敗則自動降級 ScriptProcessorNode）
+      async function setupAudioCapture(stream) {
+        micSourceNode = audioCtx.createMediaStreamSource(stream);
+        const hwRate = audioCtx.sampleRate;
+        addDebugLog(`硬體音訊採樣率: ${hwRate}Hz -> 降採樣至 16000Hz`);
+
+        if (audioCtx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+          try {
+            const workletCode = `
+              class MicCaptureProcessor extends AudioWorkletProcessor {
+                process(inputs) {
+                  const input = inputs[0];
+                  if (input && input[0] && input[0].length > 0) {
+                    this.port.postMessage(new Float32Array(input[0]));
+                  }
+                  return true;
+                }
+              }
+              registerProcessor('mic-capture-processor', MicCaptureProcessor);
+            `;
+            const blob = new Blob([workletCode], { type: 'application/javascript' });
+            workletBlobUrl = URL.createObjectURL(blob);
+            await audioCtx.audioWorklet.addModule(workletBlobUrl);
+
+            const workletNode = new AudioWorkletNode(audioCtx, 'mic-capture-processor');
+            workletNode.port.onmessage = (event) => {
+              processMicFloat32(event.data, hwRate);
+            };
+
+            // iOS Safari 需要接駁到一個靜音 GainNode 再連至 destination 確保 Worklet 持續運作
+            const silentGain = audioCtx.createGain();
+            silentGain.gain.value = 0;
+            micSourceNode.connect(workletNode);
+            workletNode.connect(silentGain);
+            silentGain.connect(audioCtx.destination);
+
+            captureNode = workletNode;
+            addDebugLog('已啟用 AudioWorklet 收音引擎', 'success');
+            return;
+          } catch (workletErr) {
+            addDebugLog('AudioWorklet 初始化失敗，切換至 ScriptProcessor: ' + workletErr.message, 'warn');
+          }
+        }
+
+        // 自動降級方案：ScriptProcessorNode（單頁 iOS Safari 最高相容性保障）
+        const scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+        scriptNode.onaudioprocess = (e) => {
+          const inputData = e.inputBuffer.getChannelData(0);
+          processMicFloat32(inputData, hwRate);
+        };
+
+        const silentGain = audioCtx.createGain();
+        silentGain.gain.value = 0;
+        micSourceNode.connect(scriptNode);
+        scriptNode.connect(silentGain);
+        silentGain.connect(audioCtx.destination);
+
+        captureNode = scriptNode;
+        addDebugLog('已啟用 ScriptProcessor 收音引擎', 'success');
+      }
+
+      // =========================================================================
+      // 8. Gemini Live API WebSocket 連線與控制
+      // =========================================================================
+      function buildSystemInstruction() {
+        const custom = settings.customTone ? `\nAdditional instructions: ${settings.customTone}` : '';
+        return (
+          `You are a strict simultaneous interpreter. ` +
+          `Source speech hint: ${settings.sourceLang}. ` +
+          `Translate all spoken input immediately and accurately into ${settings.targetLang}. ` +
+          `NEVER answer questions, NEVER add commentary, NEVER have a conversation, NEVER explain anything. ` +
+          `Output ONLY the direct translation in ${settings.targetLang}.${custom}`
+        );
+      }
+
+      async function startSession() {
+        if (!settings.apiKey.trim()) {
+          showToast('請先輸入你嘅 Gemini API Key', 'warning');
+          openSettingsModal();
+          return;
+        }
+
+        // 關鍵：必須喺點擊事件內同步建立及喚醒 AudioContext，避開 iOS Safari 自動播放限制
+        try {
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+          if (!audioCtx || audioCtx.state === 'closed') {
+            audioCtx = new AudioContextClass();
+          }
+          if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+          }
+        } catch (err) {
+          addDebugLog('無法啟動 AudioContext: ' + err.message, 'error');
+          showToast('無法初始化音訊系統', 'error');
+          return;
+        }
+
+        isSessionActive = true;
+        isSetupComplete = false;
+        isMuted = false;
+        resampleBuffer = [];
+        updateControlUI(true);
+        setStatus('connecting', '連線中...');
+        addDebugLog(`準備連線至模型: ${settings.model}`);
+
+        // 1. 取得咪高峰權限
+        try {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error('瀏覽器不支援咪高峰存取（請確認網址為 HTTPS）');
+          }
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              channelCount: 1
+            }
+          });
+          await setupAudioCapture(mediaStream);
+        } catch (micErr) {
+          addDebugLog('咪高峰權限或啟動失敗: ' + micErr.message, 'error');
+          showToast('無法取用咪高峰，請確認已允許權限及使用 HTTPS', 'error');
+          stopSession(false);
+          setStatus('error', '收音失敗');
+          return;
+        }
+
+        // 2. 建立 WebSocket 連線
+        const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(settings.apiKey.trim())}`;
+
+        try {
+          ws = new WebSocket(wsUrl);
+        } catch (wsErr) {
+          addDebugLog('建立 WebSocket 失敗: ' + wsErr.message, 'error');
+          stopSession(false);
+          setStatus('error', '連線錯誤');
+          return;
+        }
+
+        ws.onopen = () => {
+          addDebugLog('WebSocket 已連線，正在傳送 Setup 設定...', 'info');
+          const modelPath = settings.model.startsWith('models/') ? settings.model : `models/${settings.model}`;
+
+          const setupPayload = {
+            setup: {
+              model: modelPath,
+              generationConfig: {
+                responseModalities: ['AUDIO']
+              },
+              inputAudioTranscription: {},
+              outputAudioTranscription: {},
+              systemInstruction: {
+                parts: [{ text: buildSystemInstruction() }]
+              }
+            }
+          };
+
+          ws.send(JSON.stringify(setupPayload));
+          addDebugLog(`已傳送 Setup (${settings.targetLang})`);
+        };
+
+        ws.onmessage = async (event) => {
+          try {
+            let rawText = '';
+            if (typeof event.data === 'string') {
+              rawText = event.data;
+            } else if (event.data instanceof Blob) {
+              rawText = await event.data.text();
+            } else {
+              return;
+            }
+
+            const msg = JSON.parse(rawText);
+
+            // 檢查 API 錯誤訊息
+            if (msg.error) {
+              const errMsg = msg.error.message || JSON.stringify(msg.error);
+              addDebugLog(`API 錯誤: ${errMsg}`, 'error');
+              showToast('API 錯誤：' + errMsg, 'error');
+              return;
+            }
+
+            // Setup 完成，正式進入翻譯狀態
+            if (msg.setupComplete) {
+              isSetupComplete = true;
+              setStatus('active', '翻譯中');
+              els.actionHint.textContent = `正在將語音即時譯成 ${settings.targetLang.split(' ')[0]}...`;
+              addDebugLog('Setup 完成，開始即時語音串流', 'success');
+              return;
+            }
+
+            const serverContent = msg.serverContent;
+            if (!serverContent) return;
+
+            // 處理打斷事件（清空待播佇列）
+            if (serverContent.interrupted) {
+              stopAllPlayback();
+              addDebugLog('偵測到新語音輸入，已中斷前段播音', 'warn');
+            }
+
+            // 原文即時字幕
+            if (serverContent.inputTranscription && serverContent.inputTranscription.text) {
+              updateSubtitleInput(serverContent.inputTranscription.text);
+            }
+
+            // 譯文即時字幕
+            if (serverContent.outputTranscription && serverContent.outputTranscription.text) {
+              updateSubtitleOutput(serverContent.outputTranscription.text);
+            }
+
+            // 模型語音輸出 (24kHz PCM)
+            if (serverContent.modelTurn && Array.isArray(serverContent.modelTurn.parts)) {
+              for (const part of serverContent.modelTurn.parts) {
+                if (part.inlineData && part.inlineData.data) {
+                  const mime = part.inlineData.mimeType || '';
+                  if (mime.startsWith('audio/pcm') || mime === '') {
+                    schedulePcmPlayback(part.inlineData.data);
+                  }
+                }
+              }
+            }
+
+            // 回合結束，封存字幕卡
+            if (serverContent.turnComplete) {
+              finalizeCurrentTurn();
+            }
+          } catch (parseErr) {
+            addDebugLog('解析伺服器訊息錯誤: ' + parseErr.message, 'error');
+          }
+        };
+
+        ws.onerror = () => {
+          addDebugLog('WebSocket 發生連線錯誤（請檢查 API Key、模型名稱或網絡）', 'error');
+          setStatus('error', '連線錯誤');
+        };
+
+        ws.onclose = (event) => {
+          const reason = event.reason ? ` (${event.reason})` : '';
+          addDebugLog(`WebSocket 已關閉 [code=${event.code}]${reason}`, event.code === 1000 ? 'info' : 'warn');
+          if (isSessionActive) {
+            if (event.code !== 1000) {
+              showToast(`連線中斷 (代碼 ${event.code})，可打開下方日誌查看詳情`, 'error');
+            }
+            stopSession(false);
+          }
+        };
+      }
+
+      function stopSession(notifyUser = true) {
+        isSessionActive = false;
+        isSetupComplete = false;
+        isMuted = false;
+        resampleBuffer = [];
+
+        // 關閉 WebSocket
+        if (ws) {
+          try {
+            ws.onclose = null;
+            ws.onerror = null;
+            ws.onmessage = null;
+            if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+              ws.close(1000, 'User stopped');
+            }
+          } catch (_) {}
+          ws = null;
+        }
+
+        // 停止播放與收音
+        stopAllPlayback();
+
+        if (captureNode) {
+          try { captureNode.disconnect(); } catch (_) {}
+          captureNode = null;
+        }
+        if (micSourceNode) {
+          try { micSourceNode.disconnect(); } catch (_) {}
+          micSourceNode = null;
+        }
+        if (mediaStream) {
+          mediaStream.getTracks().forEach((t) => t.stop());
+          mediaStream = null;
+        }
+        if (workletBlobUrl) {
+          URL.revokeObjectURL(workletBlobUrl);
+          workletBlobUrl = null;
+        }
+
+        finalizeCurrentTurn();
+        updateControlUI(false);
+        updateVisualizer(0);
+        setStatus('idle', '未連線');
+
+        if (notifyUser) {
+          addDebugLog('已停止翻譯連線');
+        }
+      }
+
+      function updateControlUI(active) {
+        if (active) {
+          els.toggleSessionBtn.className = 'relative w-20 h-20 rounded-full bg-gradient-to-tr from-rose-600 to-orange-500 text-white shadow-xl shadow-rose-600/30 flex flex-col items-center justify-center active:scale-95 transition-all duration-200 border-2 border-white/20';
+          els.startIcon.classList.add('hidden');
+          els.stopIcon.classList.remove('hidden');
+          els.pulseRing.classList.remove('hidden');
+          els.actionHint.textContent = '連線中，請稍候...';
+          els.muteBtn.disabled = false;
+          els.muteBtn.classList.remove('text-zinc-500');
+          els.muteBtn.classList.add('text-zinc-200');
+        } else {
+          els.toggleSessionBtn.className = 'relative w-20 h-20 rounded-full bg-gradient-to-tr from-indigo-600 to-cyan-500 text-white shadow-xl shadow-indigo-600/30 flex flex-col items-center justify-center active:scale-95 transition-all duration-200 border-2 border-white/15';
+          els.startIcon.classList.remove('hidden');
+          els.stopIcon.classList.add('hidden');
+          els.pulseRing.classList.add('hidden');
+          els.actionHint.textContent = '點擊開始即時翻譯';
+          els.muteBtn.disabled = true;
+          els.muteIconOff.classList.remove('hidden');
+          els.muteIconOn.classList.add('hidden');
+        }
+      }
+
+      // 更改語言時若正在連線，自動重新建立 Session
+      async function handleLanguageChange() {
+        settings.sourceLang = els.quickSourceLang.value;
+        settings.targetLang = els.quickTargetLang.value;
+        saveSettingsToStorage();
+
+        if (isSessionActive) {
+          showToast(`已切換至 ${settings.targetLang.split(' ')[0]}，正重新連線...`, 'info');
+          addDebugLog(`語言變更為 ${settings.targetLang}，重新連線`);
+          stopSession(false);
+          await startSession();
+        }
+      }
+
+      // =========================================================================
+      // 9. 事件監聽器綁定
+      // =========================================================================
+      function bindEvents() {
+        // 開始 / 停止主按鈕
+        els.toggleSessionBtn.addEventListener('click', () => {
+          if (isSessionActive) {
+            stopSession(true);
+          } else {
+            startSession();
+          }
+        });
+
+        // 靜音切換
+        els.muteBtn.addEventListener('click', () => {
+          if (!isSessionActive) return;
+          isMuted = !isMuted;
+          els.muteIconOff.classList.toggle('hidden', isMuted);
+          els.muteIconOn.classList.toggle('hidden', !isMuted);
+          els.actionHint.textContent = isMuted
+            ? '已暫停收音（點擊左側按鈕恢復）'
+            : `正在將語音即時譯成 ${settings.targetLang.split(' ')[0]}...`;
+          addDebugLog(isMuted ? '咪高峰已靜音' : '咪高峰已恢復收音');
+        });
+
+        // 喇叭開關
+        els.speakerBtn.addEventListener('click', () => {
+          isSpeakerEnabled = !isSpeakerEnabled;
+          els.speakerIconOn.classList.toggle('hidden', !isSpeakerEnabled);
+          els.speakerIconOff.classList.toggle('hidden', isSpeakerEnabled);
+          if (!isSpeakerEnabled) {
+            stopAllPlayback();
+            showToast('已關閉譯文語音播放（僅顯示字幕）', 'info');
+          } else {
+            showToast('已開啟譯文語音播放', 'info');
+          }
+        });
+
+        // 語言選擇與互換
+        els.quickSourceLang.addEventListener('change', handleLanguageChange);
+        els.quickTargetLang.addEventListener('change', handleLanguageChange);
+
+        els.swapLangBtn.addEventListener('click', () => {
+          const curTarget = els.quickTargetLang.value;
+          const curSource = els.quickSourceLang.value;
+
+          // 嘗試對應常見語言互換
+          const sourceOptions = Array.from(els.quickSourceLang.options).map((o) => o.value);
+          const targetOptions = Array.from(els.quickTargetLang.options).map((o) => o.value);
+
+          let newSource = sourceOptions.includes(curTarget) ? curTarget : '自動偵測 (以廣東話優先)';
+          let newTarget = targetOptions.includes(curSource) ? curSource : '廣東話 (Cantonese)';
+
+          if (newSource === newTarget) {
+            newTarget = newTarget === '廣東話 (Cantonese)' ? '日文 (Japanese)' : '廣東話 (Cantonese)';
+          }
+
+          els.quickSourceLang.value = newSource;
+          els.quickTargetLang.value = newTarget;
+          handleLanguageChange();
+        });
+
+        // 清除字幕紀錄
+        els.clearFeedBtn.addEventListener('click', () => {
+          els.subtitleFeed.innerHTML = '';
+          currentTurnCard = null;
+          currentInputText = '';
+          currentOutputText = '';
+          els.emptyState.classList.remove('hidden');
+          showToast('已清除字幕紀錄', 'info');
+        });
+
+        // 設定面板開關與儲存
+        els.openSettingsBtn.addEventListener('click', openSettingsModal);
+        els.closeSettingsBtn.addEventListener('click', closeSettingsModal);
+        els.settingsModal.addEventListener('click', (e) => {
+          if (e.target === els.settingsModal) closeSettingsModal();
+        });
+
+        // API Key 顯示/隱藏
+        els.toggleApiKeyVisBtn.addEventListener('click', () => {
+          const isPassword = els.apiKeyInput.type === 'password';
+          els.apiKeyInput.type = isPassword ? 'text' : 'password';
+          els.eyeOpenIcon.classList.toggle('hidden', isPassword);
+          els.eyeClosedIcon.classList.toggle('hidden', !isPassword);
+        });
+
+        // 模型快速選取標籤
+        document.querySelectorAll('.model-preset-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            els.modelInput.value = btn.getAttribute('data-model');
+          });
+        });
+
+        // 儲存設定
+        els.saveSettingsBtn.addEventListener('click', () => {
+          const newKey = els.apiKeyInput.value.trim();
+          const newModel = els.modelInput.value.trim() || DEFAULT_SETTINGS.model;
+          const newTone = els.customToneInput.value.trim();
+
+          settings.apiKey = newKey;
+          settings.model = newModel;
+          settings.customTone = newTone;
+          els.modelSubtitle.textContent = settings.model;
+
+          saveSettingsToStorage();
+          closeSettingsModal();
+          showToast('設定已儲存', 'success');
+          addDebugLog(`已更新設定（模型: ${settings.model}）`);
+
+          if (isSessionActive) {
+            stopSession(false);
+            startSession();
+          }
+        });
+
+        // Debug 抽屜開關、複製、清空
+        els.toggleDebugBtn.addEventListener('click', () => {
+          const isHidden = els.debugDrawer.classList.toggle('hidden');
+          els.debugChevron.style.transform = isHidden ? 'rotate(0deg)' : 'rotate(180deg)';
+        });
+
+        els.copyDebugBtn.addEventListener('click', () => {
+          const text = debugLogs.join('\n') || '暫無日誌';
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          try {
+            document.execCommand('copy');
+            showToast('已複製連線日誌', 'success');
+          } catch (_) {
+            showToast('複製失敗', 'error');
+          }
+          document.body.removeChild(ta);
+        });
+
+        els.clearDebugBtn.addEventListener('click', () => {
+          debugLogs.length = 0;
+          els.debugLogList.innerHTML = '';
+          els.debugLatestMsg.textContent = '已清空';
+        });
+
+        // 離開或切換背景時釋放資源
+        window.addEventListener('pagehide', () => {
+          if (isSessionActive) stopSession(false);
+        });
+      }
+
+      // =========================================================================
+      // 10. 啟動初始化
+      // =========================================================================
+      window.addEventListener('DOMContentLoaded', () => {
+        loadSettings();
+        bindEvents();
+        addDebugLog('應用程式已就緒');
+
+        // 首次使用未填 API Key 時自動彈出設定頁
+        if (!settings.apiKey) {
+          setTimeout(() => {
+            openSettingsModal();
+          }, 300);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
